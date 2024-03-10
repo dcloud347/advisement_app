@@ -18,5 +18,5 @@ class Req:
 
 
 if __name__ == "__main__":
-    response = Req.get(medication_statement_info_url, {"patient": "30163"})
-    print(json.dumps(response['entry'][0]['resource']['dosage'][0]['text']))
+    response = Req.get(medication_statement_info_url, {"dasds": "30163"})
+    print(json.dumps(response))

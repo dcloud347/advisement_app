@@ -3,13 +3,16 @@ from .models import Patient, MedicationStatement, Messages, Chats
 
 
 class PatientSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField()
+
     class Meta:
         model = Patient
         fields = "__all__"
 
 
 class MedicationStatementSerializer(serializers.ModelSerializer):
-    patient = PatientSerializer(read_only=True)
+    patient_name = serializers.CharField(source='patient.name')
+    id = serializers.IntegerField()
 
     class Meta:
         model = MedicationStatement

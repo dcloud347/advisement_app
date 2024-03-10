@@ -9,6 +9,48 @@ from util.Req import Req, patient_info_url, medication_statement_info_url
 from util.openai_tools import OpenAITools
 
 
+def get_name(resource):
+    try:
+        name_resource = resource['name']
+    except KeyError:
+        return None
+    name = name_resource[0]
+    try:
+        return name['text']
+    except KeyError:
+        pass
+    try:
+        family_name = name['family']
+    except KeyError:
+        family_name = ""
+    try:
+        given_name = " ".join(name['given'])
+    except KeyError:
+        given_name = ""
+    return given_name + " " + family_name
+
+
+def process_patient_data(patient_data):
+    try:
+        data = patient_data['entry']
+    except KeyError:
+        return Response(data="No Patient Found", status=status.HTTP_400_BAD_REQUEST)
+    for i in data:
+        resource = i['resource']
+        id = resource['id']
+        name = get_name(resource)
+        try:
+            phone = resource['phone'][0]['value']
+        except KeyError:
+            phone = None
+        try:
+            address = ','.join(resource['address'][0]['line'])
+        except KeyError:
+            address = None
+        Patient.objects.update_or_create(defaults={'id': id, 'name': name, 'telephone': phone, 'address': address},
+                                         id=id)
+
+
 class PatientViewSet(ReadOnlyModelViewSet):
     queryset = Patient.objects.all()
     serializer_class = PatientSerializer
@@ -16,32 +58,9 @@ class PatientViewSet(ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'])
     def save(self, request, *args, **kwargs):
-        patient_data = Req.get(patient_info_url, data=request.query_params)
-        try:
-            data = patient_data['entry']
-        except KeyError:
-            return Response(data="No Patient Found", status=status.HTTP_400_BAD_REQUEST)
-        result = []
-        for i in data:
-            resource = i['resource']
-            id = resource['id']
-            try:
-                name = resource['name'][0]['text']
-            except KeyError:
-                name = None
-            try:
-                phone = resource['phone'][0]['value']
-            except KeyError:
-                phone = None
-            try:
-                address = ','.join(resource['address'][0]['line'])
-            except KeyError:
-                address = None
-            result.append({'id': id, 'name': name, 'phone': phone, 'address': address})
-        serializer = PatientSerializer(data=result, many=True)
-        if serializer.is_valid(raise_exception=True):
-            serializer.save()
-        return Response(data=result, status=status.HTTP_200_OK)
+        data = Req.get(patient_info_url, data=request.query_params)
+        process_patient_data(data)
+        return Response(status=status.HTTP_200_OK)
 
 
 class MedicationStatementViewSet(ReadOnlyModelViewSet):
@@ -57,23 +76,28 @@ class MedicationStatementViewSet(ReadOnlyModelViewSet):
         except KeyError:
             return Response(data="No Medication Statement Found", status=status.HTTP_400_BAD_REQUEST)
         result = []
+        patient_id_array = []
         for i in data:
             resource = i['resource']
             id = resource['id']
             try:
-                medication_statement = resource['medicationCodeableConcept']['text'] + resource['dosage'][0]['text']
+                medication_statement = resource['medicationCodeableConcept']['text'] + " " + resource['dosage'][0][
+                    'text']
             except KeyError:
                 medication_statement = None
+            patient_id = resource['subject']['reference'].split('/')[1]
             try:
-                patient_id = Patient.objects.get(id=request.query_params.get('patient')).id
+                if patient_id != "":
+                    patient_id = Patient.objects.get(id=patient_id).id
             except Patient.DoesNotExist:
-                patient_id = None
+                patient_id_array.append(patient_id)
             if medication_statement is not None:
                 result.append({'id': id, 'medication_statement': medication_statement, 'patient_id': patient_id})
-        serializer = MedicationStatementSerializer(data=result, many=True)
-        if serializer.is_valid(raise_exception=True):
-            serializer.save()
-        return Response(data=result, status=status.HTTP_200_OK)
+        patient_id_array = list(set(patient_id_array))
+        process_patient_data(Req.get(patient_info_url, {"_id": ",".join(patient_id_array)}))
+        for data in result:
+            MedicationStatement.objects.update_or_create(defaults=data, id=data['id'])
+        return Response(status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def start(self, request, *args, **kwargs):
@@ -85,7 +109,7 @@ class MedicationStatementViewSet(ReadOnlyModelViewSet):
         result, role = OpenAITools.get_advisement(medication_statement.medication_statement, messages)
         Messages.objects.create(chat=chat, content=medication_statement.medication_statement, role='user')
         Messages.objects.create(chat=chat, content=result, role=role)
-        return Response(result, status=status.HTTP_200_OK)
+        return Response({"result": result, "chat": chat.id}, status=status.HTTP_200_OK)
 
 
 class ChatViewSet(ReadOnlyModelViewSet):
